@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+
+# this script does a local ansible run for cfn nodes based upon values in /etc/atl
+
+###############
+# prereqs
+
+# extend path
+export PATH=$PATH:/usr/local/bin:/usr/sbin
+
+# git
+if ! which git ; then
+    # install git
+    yum -y install git || { echo "Failed to install git"; exit 9; }
+fi
+
+# python
+if ! which python ; then
+    # install python
+    yum -y install python || { echo "Failed to install python"; exit 9; }
+fi
+
+# ansible
+if ! which ansible ; then
+    # install ansible
+    pip install ansible || { echo "Failed to install ansible"; exit 9; }
+fi
+
+# setup workspace and cleanup on exit
+ANSIBLE_TMPDIR=$(mktemp -d)
+trap "cd;rm -rf $ANSIBLE_TMPDIR" EXIT
+cd $ANSIBLE_TMPDIR
+
+# create a local inventory file for ansible
+source /etc/atl
+apptype=$(echo "$ATL_ENABLED_PRODUCTS" | tr '[:upper:]' '[:lower:]')
+servicetype=$(echo $ATL_AWS_STACK_NAME|awk -F'[-.]' '{print $1}')
+env=$(echo $ATL_AWS_STACK_NAME|awk -F'[-.]' '{print $2}')
+if [ "$env" == "" ]; then env="prod";fi
+# echo "apptype=$apptyp env=$env"
+cat << EOF > local.inv
+[local]
+127.0.0.1 ansible_connection=local
+
+[${servicetype}-${env}-${apptype}:children]
+local
+
+[${servicetype}-${env}:children]
+${servicetype}-${env}-${apptype}
+
+[${servicetype}:children]
+${servicetype}-${env}
+
+[atl-${apptype}-${env}:children]
+${servicetype}-${env}
+
+[atl-${apptype}:children]
+atl-${apptype}-${env}
+
+[atl-${env}:children]
+atl-${apptype}-${env}
+
+[atl]
+atl-${env}
+EOF
+cat local.inv
+
+# clone a current copy of ansible repo
+if [[  -z  $ATL_LOCALANSIBLE_KEY  ]]; then
+  keyname="gitkey"
+else
+  keyname=$ATL_LOCALANSIBLE_KEY
+fi
+region=$(curl http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r '.region')
+gitkey=$(aws --region=$region ssm get-parameters --names $keyname --with-decryption | jq --raw-output '.Parameters[0] .Value')
+echo -e $gitkey > $ANSIBLE_TMPDIR/gitkey
+cat $ANSIBLE_TMPDIR/gitkey
+chmod 600 $ANSIBLE_TMPDIR/gitkey
+export GIT_SSH_COMMAND="ssh -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -i $ANSIBLE_TMPDIR/gitkey"
+if [[  -z  $ATL_LOCALANSIBLE_REPO  ]]; then
+  repo="git@bitbucket.org:atlassian/atlassian-local-ansible-example.git"
+else
+  repo=$ATL_LOCALANSIBLE_REPO
+fi
+repodir=$(basename $repo | cut -d'.' -f1)
+git clone $repo
+
+cd $repodir
+export ANSIBLE_LOG_PATH=/var/log/ansible.log
+export ANSIBLE_HOST_KEY_CHECKING=no
+ansible-playbook -i ../local.inv pb.nodesetup.yml -b

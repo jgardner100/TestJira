@@ -1,0 +1,160 @@
+---
+# name: cron task to run ansible once a day
+
+- name: cron task to run ansible once a day
+  cron:
+    name: "cron task to run ansible once a day"
+    minute: 0
+    hour: 0
+    job: "/usr/local/bin/local-ansible-run"
+
+- name: local-ansible-run self updater
+  copy:
+    src: local-ansible-run
+    dest: /usr/local/bin/local-ansible-run
+    owner: root
+    group: root
+    mode: 744
+
+- name: get stack name
+  shell: grep ATL_AWS_STACK_NAME /etc/atl | cut -d= -f2
+  register: stack_name
+
+- debug: msg="{{ stack_name.stdout }}"
+
+- name: get region
+  shell: curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | jq -c -r .region
+  register: region
+
+- debug: msg="{{ region.stdout }}"
+
+- name: get hostedzone
+  shell: grep ATL_HOSTEDZONE /etc/atl | cut -d= -f2 | sed 's/\(.*\)\.$/\1/'
+  register: hostedzone
+
+- debug: msg="{{ hostedzone.stdout }}"
+
+- name: get autoScaleGroupName
+  shell: grep ATL_AUTOSCALING_GROUP_NAME /etc/atl | cut -d= -f2 | sed 's/\(.*\)\.$/\1/'
+  register: asg_name
+
+- debug: msg="{{ asg_name.stdout }}"
+
+# Install boto3 python package for stack related python scripts
+- pip:
+    name: boto3
+
+- name: get ip addresses for the nodes in the cfn stack
+  shell: "PYTHONPATH=bin python bin/get_clusternode_ips.py {{ stack_name.stdout }} {{ region.stdout }} {{ asg_name.stdout }}"
+  register: ip_list
+
+- debug: msg="{{ ip_list.stdout }}"
+
+- name: create a r53 A rec for the nodes in the cfn stack
+  route53:
+    command: create
+    zone: "{{ hostedzone.stdout }}"
+    record: "{{ stack_name.stdout }}.nodes.{{ hostedzone.stdout }}"
+    type: A
+    ttl: 7200
+    value: "{{ ip_list.stdout }}"
+    overwrite: "yes"
+    private_zone: "yes"
+  ignore_errors: True
+
+# Crowd SSO example
+# switches out the connector in seraph-config.xml and copies crowd.properties
+- name: uncomment the ConfluenceCrowdSSOAuthenticator in seraph-config.xml
+  replace:
+    path: /opt/atlassian/confluence/confluence/WEB-INF/classes/seraph-config.xml
+    regexp: '^.*(<authenticator class="com.atlassian.confluence.user.ConfluenceCrowdSSOAuthenticator"\/>).*$'
+    replace: '\1'
+  when: crowd_base_url is defined
+
+- name: comment out the default ConfluenceAuthenticator in seraph-config.xml
+  replace:
+    path: /opt/atlassian/confluence/confluence/WEB-INF/classes/seraph-config.xml
+    regexp: '^.*(<authenticator class="com.atlassian.confluence.user.ConfluenceAuthenticator"\/>).*$'
+    replace: '<!-- \1 -->'
+  when: crowd_base_url is defined
+
+- name: copy the crowd.properties file
+  template:
+    src: crowd.properties.j2
+    dest: /opt/atlassian/confluence/confluence/WEB-INF/classes/crowd.properties
+    owner: 501
+    group: 501
+    mode: 0644
+  when: crowd_base_url is defined
+
+
+# allow traffic from a stack defined in '{{ forge_hostname }}' to hit the application nodes over 80,443,8080
+- block:
+  - name: get metadata including region
+    ec2_metadata_facts:
+    no_log: True
+
+  - debug: msg="local region={{ ansible_ec2_placement_region }}"
+
+  # Install boto3 python package for stack related python scripts
+  - name: pip install boto3
+    pip:
+      name: boto3
+
+  - name: get ec2 instance facts
+    ec2_instance_facts:
+      region: "{{ ansible_ec2_placement_region }}"
+      instance_ids:
+        - "{{ ansible_ec2_instance_identity_document_instanceid }}"
+    retries: 10
+    delay: 10
+    register: instanceFacts
+    until: instanceFacts.error is not defined
+
+  - debug: msg="{{ instanceFacts }}"
+    when:
+      - instanceFacts is defined
+
+  - name: get ec2 sg facts
+    ec2_group_facts:
+      region: "{{ ansible_ec2_placement_region }}"
+      filters:
+        group_name: "{{ instanceFacts.instances[0].security_groups[0].group_name }}"
+    register: groupFacts
+
+  - debug: msg="{{ groupFacts }}"
+    when:
+      - groupFacts is defined
+
+  - name: Ansible create file with content example
+    copy:
+      dest: "/tmp/output.txt"
+      content: |
+        hello
+        world
+
+#  - name: Simple A record (IPV4 address) lookup for forge_hostname
+#    shell: getent hosts {{ forge_hostname }} | cut -d' ' -f1
+#    register: forge_ip
+#
+#  - name: add security group rules for forge to access new nodes
+#    ec2_group:
+#      name: "{{ groupFacts.security_groups[0].group_name }}"
+#      description: "{{ groupFacts.security_groups[0].description }}"
+#      vpc_id: "{{ groupFacts.security_groups[0].vpc_id }}"
+#      purge_rules: false
+#      region: "{{ ansible_ec2_placement_region }}"
+#      rules:
+#        - proto: tcp
+#          ports:
+#          - 80
+#          - 443
+#          - 8080
+#          cidr_ip: "{{ forge_ip.stdout }}/32"
+#          rule_desc: forge - allow forge to probe resoures for this stack
+#    when:
+#      - groupFacts is defined
+#      - groupFacts.security_groups[0].group_name is defined
+#      - forge_ip.stdout != ""
+#    ignore_errors: True
+#  when: forge_hostname is defined

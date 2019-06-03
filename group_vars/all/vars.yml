@@ -1,0 +1,6 @@
+---
+# vars file for ALL machines
+
+
+# uncomment and edit this to automatically add security group rules for forge to check node status
+#forge_hostname: 'forge.my.hosted.zone'

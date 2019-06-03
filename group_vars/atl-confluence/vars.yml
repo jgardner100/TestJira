@@ -1,0 +1,9 @@
+---
+# vars file for Confluence nodes
+
+## Uncomment and update these to use CrowdSSO Authenticator in Confluence
+#crowd_application_name: confluence
+## You might want to store this password encrypted in an ansible vault when using in production
+#crowd_application_password: supersecret
+#crowd_server_url: https://mycrowd.example.com/crowd/services/
+#crowd_base_url: https://mycrowd.example.com/crowd/

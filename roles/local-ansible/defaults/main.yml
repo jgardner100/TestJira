@@ -1,0 +1,6 @@
+crowd_application_login_url: http://localhost:8095/crowd/console/
+crowd_session_isauthenticated: session.isauthenticated
+crowd_session_tokenkey: session.tokenkey
+crowd_session_validationinterval: 2
+crowd_session_lastvalidation: session.lastvalidation
+crowd_cookie_tokenkey: crowd.token_key
