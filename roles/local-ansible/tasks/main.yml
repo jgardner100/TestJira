@@ -115,16 +115,16 @@
     when:
       - instanceFacts is defined
 
-  - name: get ec2 sg facts
-    ec2_group_facts:
-      region: "{{ ansible_ec2_placement_region }}"
-      filters:
-        group_name: "{{ instanceFacts.instances[0].security_groups[0].group_name }}"
-    register: groupFacts
-
-  - debug: msg="{{ groupFacts }}"
-    when:
-      - groupFacts is defined
+#  - name: get ec2 sg facts
+#    ec2_group_facts:
+#      region: "{{ ansible_ec2_placement_region }}"
+#      filters:
+#        group_name: "{{ instanceFacts.instances[0].security_groups[0].group_name }}"
+#    register: groupFacts
+#
+#  - debug: msg="{{ groupFacts }}"
+#    when:
+#      - groupFacts is defined
 
   - name: Ansible create file with content example
     copy:
